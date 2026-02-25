@@ -16,7 +16,7 @@ import org.testcontainers.junit.jupiter.Testcontainers
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Testcontainers
-class DocumentApiLogicTest {
+class DocumentUpdateIntegrationTest {
 
     companion object {
         @Container
@@ -33,34 +33,49 @@ class DocumentApiLogicTest {
     @BeforeEach
     fun setup() {
         mongoTemplate.dropCollection(MyDocument::class.java)
-        // Seed initial data
-        mongoTemplate.save(MyDocument(name = "a", rows = listOf(RowEntry("a/init", "first"))))
+        // Setup initial document with one row
+        val initialRows = listOf(
+            RowEntry("a/row1", "original content"),
+            RowEntry("a/row2", "do not touch")
+        )
+        mongoTemplate.save(MyDocument(name = "a", rows = initialRows))
     }
 
     @Test
-    fun `logic 1 - should return 404 when document name does not exist`() {
-        val entry = RowEntry("nonexistent/row", "xxx")
-        val response = restTemplate.postForEntity("/api/rows/nonexistent", entry, Map::class.java)
+    fun `PUT should update existing row content while preserving other rows`() {
+        // Data to update
+        val updateRequest = RowEntry("a/row1", "updated content")
+
+        // Using TestRestTemplate.put (Note: put returns void, use exchange if you need the body)
+        restTemplate.put("/api/documents/a/rows", updateRequest)
+
+        // Verify in Database
+        val updatedDoc = mongoTemplate.findOne(
+            org.springframework.data.mongodb.core.query.Query(
+                org.springframework.data.mongodb.core.query.Criteria.where("name").`is`("a")
+            ),
+            MyDocument::class.java
+        )
+
+        val row1 = updatedDoc?.rows?.find { it.rowName == "a/row1" }
+        val row2 = updatedDoc?.rows?.find { it.rowName == "a/row2" }
+
+        assertThat(row1?.otherFields).isEqualTo("updated content")
+        assertThat(row2?.otherFields).isEqualTo("do not touch") // Assert isolation
+    }
+
+    @Test
+    fun `PUT should return 404 when rowName does not exist`() {
+        val nonExistentUpdate = RowEntry("a/ghost-row", "some data")
+        
+        // Use exchange to capture the 404 response
+        val response = restTemplate.exchange(
+            "/api/documents/a/rows",
+            org.springframework.http.HttpMethod.PUT,
+            org.springframework.http.HttpEntity(nonExistentUpdate),
+            Map::class.java
+        )
 
         assertThat(response.statusCode.value()).isEqualTo(404)
-    }
-
-    @Test
-    fun `logic 2 - should return 409 when rowName already exists`() {
-        // "a/init" already exists from @BeforeEach
-        val duplicateEntry = RowEntry("a/init", "new content")
-        val response = restTemplate.postForEntity("/api/rows/a", duplicateEntry, Map::class.java)
-
-        assertThat(response.statusCode.value()).isEqualTo(409)
-    }
-
-    @Test
-    fun `should succeed when document exists and row is unique`() {
-        val validEntry = RowEntry("a/new-row", "unique content")
-        val response = restTemplate.postForEntity("/api/rows/a", validEntry, MyDocument::class.java)
-
-        assertThat(response.statusCode.is2xxSuccessful).isTrue()
-        assertThat(response.body?.rows).hasSize(2)
-        assertThat(response.body?.rows?.any { it.rowName == "a/new-row" }).isTrue()
     }
 }

@@ -41,4 +41,23 @@ class DocumentService(private val mongoTemplate: MongoTemplate) {
             MyDocument::class.java
         ) ?: throw DocumentNotFoundException("Document was deleted during processing")
     }
+    
+    fun updateRowInDocument(name: String, entry: RowEntry): MyDocument {
+        // 1. Define query to find the document AND the specific row inside the array
+        val query = Query().addCriteria(
+            Criteria.where("name").`is`(name)
+                .and("rows.rowName").`is`(entry.rowName)
+        )
+
+        // 2. Define the update. The '$' represents the index of the element matched in the query
+        val update = Update().set("rows.$.otherFields", entry.otherFields)
+
+        // 3. Execute findAndModify
+        return mongoTemplate.findAndModify(
+            query,
+            update,
+            FindAndModifyOptions.options().returnNew(true), // Returns the document AFTER update
+            MyDocument::class.java
+        ) ?: throw DocumentNotFoundException("Could not update: Document '$name' or Row '${entry.rowName}' not found")
+    }
 }
